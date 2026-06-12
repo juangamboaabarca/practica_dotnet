@@ -5,7 +5,7 @@
 
 ## Objetivo del módulo
 
-Exponer el inventario como una **API REST** y crear una interfaz web interactiva con **Blazor**. Al terminar:
+Exponer el inventario como una **API REST** y crear una interfaz web interactiva con **Blazor**. Al terminar:d
 
 - Tendrás una API con los endpoints CRUD completos.
 - La interfaz web consumirá la API desde el navegador.
@@ -34,11 +34,11 @@ Exponer el inventario como una **API REST** y crear una interfaz web interactiva
 Desde la raíz del taller:
 
 ```bash
-# Proyecto API REST
-dotnet new webapi --name Inventario.Api --output src/Inventario.Api --no-openapi
+# Proyecto API REST (.NET 8)
+dotnet new webapi --name Inventario.Api --output src/Inventario.Api --framework net8.0
 
-# Proyecto Blazor (UI web)
-dotnet new blazorserver --name Inventario.Web --output src/Inventario.Web
+# Proyecto Blazor (UI web, .NET 8)
+dotnet new blazor --name Inventario.Web --output src/Inventario.Web --framework net8.0 --interactivity Server
 
 # Agregar a la solución
 dotnet sln add src/Inventario.Api/Inventario.Api.csproj
@@ -47,7 +47,18 @@ dotnet sln add src/Inventario.Web/Inventario.Web.csproj
 # La Web consume la API y también usa los modelos del módulo 1
 cd src/Inventario.Web
 dotnet add reference ../Inventario.Consola/Inventario.Consola.csproj
+
+en la raiz del proyecto
+
+dotnet add src\Inventario.Api\Inventario.Api.csproj package Microsoft.EntityFrameworkCore --version 8.*
+dotnet add src\Inventario.Api\Inventario.Api.csproj package Microsoft.EntityFrameworkCore.Design --version 8.*
+dotnet add src\Inventario.Api\Inventario.Api.csproj package Microsoft.EntityFrameworkCore.Sqlite --version 8.*
+
+
+dotnet add src\Inventario.Api\Inventario.Api.csproj reference src\Inventario.Consola\Inventario.Consola.csproj
 ```
+
+> **Nota sobre versiones:** Si `--framework net8.0` no funciona en tu CLI, la plantilla por defecto usa .NET 8 de todas formas. Verifica tu versión con `dotnet --version` (debe ser 8.0 o superior).
 
 ---
 
@@ -58,10 +69,13 @@ dotnet add reference ../Inventario.Consola/Inventario.Consola.csproj
 ```bash
 cd src/Inventario.Api
 
-dotnet add package Microsoft.EntityFrameworkCore.Sqlite
-dotnet add package Microsoft.EntityFrameworkCore.Design
-dotnet add package Microsoft.EntityFrameworkCore.Tools
+# Para .NET 8, usa versión 8.x de Entity Framework Core
+dotnet add package Microsoft.EntityFrameworkCore.Sqlite --version 8.0.0
+dotnet add package Microsoft.EntityFrameworkCore.Design --version 8.0.0
+dotnet add package Microsoft.EntityFrameworkCore.Tools --version 8.0.0
 ```
+
+> **Compatibilidad:** Asegúrate de que `dotnet --version` retorna `8.0.x` o superior. Si usas .NET 7 o inferior, ajusta la versión de los paquetes en consecuencia (`7.0.x` para .NET 7).
 
 ### 3.2 `DbContext` — `InventarioDbContext.cs`
 
@@ -225,7 +239,8 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("PermitirBlazor", policy =>
     {
-        policy.WithOrigins("https://localhost:7200", "http://localhost:5200")
+        // En desarrollo: permite HTTPS y HTTP desde distintos puertos
+        policy.WithOrigins("https://localhost:7001", "http://localhost:5001")
               .AllowAnyMethod()
               .AllowAnyHeader();
     });
@@ -276,23 +291,31 @@ app.Run();
 Las migraciones son la historia versionada del esquema de base de datos:
 
 ```bash
+# Instalar la herramienta global de EF (solo una vez por máquina)
+# Asegúrate de usar la versión que coincida con tu .NET SDK
+dotnet tool install --global dotnet-ef --version 8.0.0
+
+# O si ya está instalada, actualízala
+dotnet tool update --global dotnet-ef --version 8.0.0
+
+# Cambiar al directorio del proyecto API
 cd src/Inventario.Api
 
-# Instalar la herramienta global de EF (solo una vez por máquina)
-dotnet tool install --global dotnet-ef
-
 # Crear la primera migración: genera el código SQL para crear la tabla Productos
-dotnet ef migrations add CrearTablaProductos
+# Si `dotnet ef` no funciona, intenta: dotnet ef --version (para verificar la instalación)
+dotnet ef migrations add CrearTablaProductos --output-dir Data/Migrations
 
-# Aplicar la migración (crea inventario.db en la raíz del proyecto)
+# Aplicar la migración (crea inventario.db en el directorio de trabajo)
 dotnet ef database update
 ```
 
-EF Core genera dos archivos en la carpeta `Migrations/`:
+**Verificación:** Tras ejecutar `database update`, deberías ver `inventario.db` en el directorio `src/Inventario.Api/`.
+
+EF Core genera dos archivos en la carpeta `Data/Migrations/`:
 - `<timestamp>_CrearTablaProductos.cs` — código C# que crea/elimina la tabla.
 - `InventarioDbContextModelSnapshot.cs` — snapshot del modelo actual.
 
-Nunca edites estos archivos manualmente.
+**Nunca edites estos archivos manualmente.** Si cometes un error, usa `dotnet ef migrations remove` para deshacer la última migración.
 
 ---
 
@@ -510,38 +533,47 @@ public record ProductoDto(string Nombre, string Categoria, decimal Precio, int S
 ```csharp
 // src/Inventario.Web/Program.cs
 
+using Inventario.Web.Components;
 using Inventario.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddRazorPages();
-builder.Services.AddServerSideBlazor();
+builder.Services.AddRazorComponents()
+    .AddInteractiveServerComponents();
 
-// Registrar HttpClient con la URL base de la API
 builder.Services.AddHttpClient<ProductoApiService>(client =>
 {
-    // La URL de la API se configura aquí; en producción vendría de appsettings.json
-    client.BaseAddress = new Uri("https://localhost:7100/");
+    client.BaseAddress = new Uri("http://localhost:5103/");
 });
 
 var app = builder.Build();
 
+if (!app.Environment.IsDevelopment())
+{
+    app.UseExceptionHandler("/Error");
+}
+
 app.UseStaticFiles();
-app.UseRouting();
-app.MapBlazorHub();
-app.MapFallbackToPage("/_Host");
+app.UseAntiforgery();
+
+app.MapRazorComponents<App>()
+    .AddInteractiveServerRenderMode();
 
 app.Run();
 ```
 
-### 7.3 Página de inventario — `Pages/Inventario.razor`
+### 7.3 Página de inventario — `Pages/Productos.razor`
 
 Los componentes Blazor (`.razor`) mezclan HTML con C# en el mismo archivo:
 
 ```razor
-@* src/Inventario.Web/Pages/Inventario.razor *@
+// src/Inventario.Web/Components/Pages/Productos.razor
 
 @page "/inventario"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Components.Web
+@using Inventario.Web.Services
+@using ProductoModel = Inventario.Consola.Models.Producto
 @inject ProductoApiService ApiService
 
 <PageTitle>Inventario de Tienda</PageTitle>
@@ -551,8 +583,9 @@ Los componentes Blazor (`.razor`) mezclan HTML con C# en el mismo archivo:
 @* ── Barra de herramientas ──────────────────────────────────────────────── *@
 <div class="barra-tools">
     <button class="btn btn-success" @onclick="AbrirFormularioNuevo">➕ Agregar</button>
+
     <input class="form-control buscador" placeholder="Buscar por nombre..."
-           @bind="textoBusqueda" @bind:event="oninput" @oninput="FiltrarProductos" />
+           @bind="textoBusqueda" @bind:event="oninput" @bind:after="FiltrarProductos" />
 </div>
 
 @* ── Tabla de productos ──────────────────────────────────────────────────── *@
@@ -644,14 +677,14 @@ else
     // En Blazor, las variables del bloque @code son el "estado" del componente.
     // Cuando cambian, Blazor re-renderiza la UI automáticamente.
 
-    private List<Inventario.Consola.Models.Producto> productos = new();
-    private List<Inventario.Consola.Models.Producto> productosFiltrados = new();
+    private List<ProductoModel> productos = new();
+    private List<ProductoModel> productosFiltrados = new();
     private bool   cargando = true;
     private string textoBusqueda = "";
 
     // Estado del formulario modal
     private bool   mostrarFormulario = false;
-    private Inventario.Consola.Models.Producto? productoEditar;
+    private ProductoModel? productoEditar;
     private string formNombre    = "";
     private string formCategoria = "";
     private decimal formPrecio   = 0;
@@ -694,7 +727,7 @@ else
         mostrarFormulario = true;
     }
 
-    private void AbrirFormularioEditar(Inventario.Consola.Models.Producto producto)
+    private void AbrirFormularioEditar(ProductoModel producto)
     {
         productoEditar = producto;
         formNombre     = producto.Nombre;
@@ -734,7 +767,7 @@ else
         }
     }
 
-    private async Task ConfirmarEliminar(Inventario.Consola.Models.Producto producto)
+    private async Task ConfirmarEliminar(ProductoModel producto)
     {
         // En producción usarías un diálogo de confirmación personalizado.
         // Por simplicidad aquí usamos confirm de JavaScript a través de JS Interop.
@@ -785,23 +818,57 @@ else
 
 ## 8. Ejecutar ambos proyectos simultáneamente
 
-Abre dos terminales en VS Code:
+### 8.1 Configurar puertos (opcional)
+
+Por defecto, los proyectos usan puertos generados aleatoriamente. Para fijarlos:
+
+1. **API** — edita `src/Inventario.Api/Properties/launchSettings.json`:
+```json
+{
+  "profiles": {
+    "https": {
+      "commandName": "Project",
+      "launchBrowser": false,
+      "applicationUrl": "https://localhost:7000;http://localhost:5000"
+    }
+  }
+}
+```
+
+2. **Web** — edita `src/Inventario.Web/Properties/launchSettings.json`:
+```json
+{
+  "profiles": {
+    "https": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "applicationUrl": "https://localhost:7001;http://localhost:5001"
+    }
+  }
+}
+```
+
+Luego actualiza `Program.cs` en ambos proyectos si es necesario.
+
+### 8.2 Ejecutar en dos terminales
+
+Abre dos terminales en VS Code o tu terminal preferida:
 
 **Terminal 1 — API:**
 ```bash
 cd src/Inventario.Api
 dotnet run
-# Escucha en https://localhost:7100
+# Escucha en https://localhost:7000 (o el puerto que hayas configurado)
 ```
 
-**Terminal 2 — Web:**
+**Terminal 2 — Web (desde otra terminal):**
 ```bash
 cd src/Inventario.Web
 dotnet run
-# Escucha en https://localhost:7200
+# Escucha en https://localhost:7001 (o el puerto que hayas configurado)
 ```
 
-Abre el navegador en `https://localhost:7200/inventario`.
+**En el navegador:** abre `https://localhost:7001/inventario` (ajusta el puerto si es distinto).
 
 Para ejecutar ambos con un solo comando, puedes usar el archivo `.vscode/tasks.json`:
 
